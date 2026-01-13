@@ -1,0 +1,7 @@
+{
+  "name": "ContaLuz - Controle de Energia Inteligente",
+  "description": "Aplicativo para previsão de autonomia e gestão de consumo de energia pré-paga para consumidores em Moçambique, com alertas inteligentes e dicas de economia.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
