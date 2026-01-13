@@ -1,14 +1,19 @@
-
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ContaLuz</title>
+    <title>ContaLuz - Gestão Inteligente</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', sans-serif; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slide-up { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .animate-in { animation: fade-in 0.5s ease-out forwards; }
+        .animate-slide-up { animation: slide-up 0.5s ease-out forwards; }
     </style>
 <script type="importmap">
 {
@@ -18,12 +23,475 @@
     "react/": "https://esm.sh/react@^19.2.3/",
     "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
     "@google/genai": "https://esm.sh/@google/genai@^1.35.0",
-    "recharts": "https://esm.sh/recharts@^3.6.0"
+    "recharts": "https://esm.sh/recharts@^3.6.0",
+    "vite": "https://esm.sh/vite@^7.3.1",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
   }
 }
 </script>
 </head>
 <body class="bg-slate-50">
     <div id="root"></div>
+
+    <script type="module">
+        import React, { useState, useEffect, useMemo, useRef } from 'https://esm.sh/react@19.0.0';
+        import ReactDOM from 'https://esm.sh/react-dom@19.0.0/client';
+        import { 
+            LayoutDashboard, Zap, History, Bell, Lightbulb, Settings, 
+            AlertCircle, Calendar, RefreshCw, ChevronRight, Loader2, 
+            CheckCircle2, PlusCircle, X, Wallet, Check, Trash2, 
+            Circle, Save, Camera, Pencil, Layers, Search, Sparkles,
+            DollarSign, User, Navigation, Home, LogOut, Info, 
+            ExternalLink, MessageSquare, Globe, Headphones, TrendingUp, AlertOctagon, AlertTriangle, Plus, XCircle
+        } from 'https://esm.sh/lucide-react@0.460.0';
+        import { 
+            BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, 
+            ResponsiveContainer, ReferenceLine 
+        } from 'https://esm.sh/recharts@2.13.3';
+        import { GoogleGenAI, Type } from 'https://esm.sh/@google/genai@0.21.0';
+
+        // --- CONSTANTES ---
+        const DEFAULT_TARIFF = 8.0;
+        const DEFAULT_HISTORICAL_AVG = 5.0;
+        const CATEGORIES = ['Iluminação', 'Cozinha', 'Climatização', 'Lavanderia', 'Eletrônicos', 'Outros'];
+        const PROVINCES = ['Maputo Cidade', 'Maputo Província', 'Gaza', 'Inhambane', 'Sofala', 'Manica', 'Tete', 'Zambézia', 'Nampula', 'Niassa', 'Cabo Delgado'];
+        const RESIDENCE_TYPES = ['Casa', 'Apartamento', 'Vivenda', 'Dependência', 'Flat', 'Outro'];
+        const PRESET_APPLIANCES = [
+            { name: 'Lâmpada LED', power: 9, hours: 6, category: 'Iluminação' },
+            { name: 'Geladeira', power: 150, hours: 24, category: 'Cozinha' },
+            { name: 'Televisão', power: 100, hours: 4, category: 'Eletrônicos' },
+            { name: 'Ar Condicionado', power: 1500, hours: 5, category: 'Climatização' },
+            { name: 'Ferro de Engomar', power: 1200, hours: 0.5, category: 'Lavanderia' },
+        ];
+
+        // --- GEMINI SERVICES ---
+        const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+
+        async function getLocationSuggestions(type, parentValue, context) {
+            const ai = getAI();
+            const prompt = `Como um especialista em geografia de Moçambique, forneça uma lista de 5 a 8 nomes reais de ${type === 'city' ? 'cidades ou municípios' : type === 'district' ? 'distritos' : 'bairros'} que pertencem a: ${parentValue}. Retorne APENAS um objeto JSON com a propriedade "suggestions" sendo um array de strings.`;
+            try {
+                const response = await ai.models.generateContent({
+                    model: 'gemini-3-flash-preview',
+                    contents: prompt,
+                    config: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: Type.OBJECT,
+                            properties: { suggestions: { type: Type.ARRAY, items: { type: Type.STRING } } },
+                            required: ["suggestions"]
+                        }
+                    }
+                });
+                return JSON.parse(response.text || '{"suggestions": []}').suggestions;
+            } catch (e) { return []; }
+        }
+
+        async function getAIEnergyTips(appliances, profile) {
+            const ai = getAI();
+            const activeAppliances = appliances.filter(a => a.isActive);
+            const totalDailyKwh = activeAppliances.reduce((acc, a) => acc + (a.power * a.hoursPerDay * (a.quantity || 1) / 1000), 0);
+            const prompt = `Analise o uso de energia desta casa em Moçambique e dê 3 dicas JSON. Consumo: ${totalDailyKwh.toFixed(2)} kWh. Aparelhos: ${activeAppliances.map(a => a.name).join(', ')}.`;
+            try {
+                const response = await ai.models.generateContent({
+                    model: 'gemini-3-flash-preview',
+                    contents: prompt,
+                    config: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    title: { type: Type.STRING },
+                                    description: { type: Type.STRING },
+                                    estimatedSaving: { type: Type.STRING }
+                                },
+                                required: ["title", "description", "estimatedSaving"]
+                            }
+                        }
+                    }
+                });
+                return JSON.parse(response.text || '[]');
+            } catch (e) { return []; }
+        }
+
+        async function getAutonomyStrategy(amount, days, appliances, profile) {
+            const ai = getAI();
+            const prompt = `Recarga de ${amount} MT para ${days} dias em Moçambique. Aparelhos: ${JSON.stringify(appliances)}. Gere estratégia em JSON.`;
+            try {
+                const response = await ai.models.generateContent({
+                    model: 'gemini-3-flash-preview',
+                    contents: prompt,
+                    config: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: Type.OBJECT,
+                            properties: {
+                                explanation: { type: Type.STRING },
+                                stopUsing: { type: Type.ARRAY, items: { type: Type.STRING } },
+                                reduceUsage: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, newTime: { type: Type.STRING }, reason: { type: Type.STRING } } } },
+                                dailyPlan: { type: Type.STRING }
+                            },
+                            required: ["explanation", "stopUsing", "reduceUsage", "dailyPlan"]
+                        }
+                    }
+                });
+                return JSON.parse(response.text || '{}');
+            } catch (e) { return null; }
+        }
+
+        async function analyzeAppliancePlate(base64Image) {
+            const ai = getAI();
+            const prompt = `Analise imagem da placa técnica. Extraia JSON: power(W), voltage, suggestedName.`;
+            try {
+                const response = await ai.models.generateContent({
+                    model: 'gemini-3-flash-preview',
+                    contents: [{ text: prompt }, { inlineData: { mimeType: 'image/jpeg', data: base64Image } }],
+                    config: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: Type.OBJECT,
+                            properties: {
+                                power: { type: Type.NUMBER },
+                                voltage: { type: Type.STRING },
+                                suggestedName: { type: Type.STRING }
+                            },
+                            required: ["power"]
+                        }
+                    }
+                });
+                return JSON.parse(response.text || '{}');
+            } catch (e) { throw e; }
+        }
+
+        async function getMonthlyAnalysis(appliances, profile, diffPercent) {
+            const ai = getAI();
+            const prompt = `Consumo mensal ${diffPercent}% diferente. Insight em JSON {insight}.`;
+            try {
+                const response = await ai.models.generateContent({
+                    model: 'gemini-3-flash-preview',
+                    contents: prompt,
+                    config: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: Type.OBJECT,
+                            properties: { insight: { type: Type.STRING } },
+                            required: ["insight"]
+                        }
+                    }
+                });
+                return JSON.parse(response.text || '{}').insight;
+            } catch (e) { return "Análise temporariamente indisponível."; }
+        }
+
+        // --- COMPONENTS ---
+
+        const SplashScreen = ({ onFinish }) => {
+            useEffect(() => { const timer = setTimeout(onFinish, 2000); return () => clearTimeout(timer); }, [onFinish]);
+            return (
+                <div className="fixed inset-0 z-[100] bg-emerald-600 flex flex-col items-center justify-center animate-in">
+                    <Zap size={64} className="text-white fill-white animate-bounce" />
+                    <h1 className="text-3xl font-black text-white mt-4 tracking-tighter">ContaLuz</h1>
+                    <p className="text-emerald-100 text-xs font-bold uppercase tracking-widest mt-1">Moçambique</p>
+                </div>
+            );
+        };
+
+        const Dashboard = ({ balance, autonomyDays, dailyKwh, consumptionDiffPercent, alerts, onUpdateData, onRecharge, isUpdating }) => {
+            const [showModal, setShowModal] = useState(false);
+            const [amount, setAmount] = useState('');
+
+            const confirm = () => { if(amount) { onRecharge(Number(amount)); setShowModal(false); setAmount(''); } };
+
+            return (
+                <div className="space-y-6 animate-slide-up">
+                    {showModal && (
+                        <div className="fixed inset-0 z-[110] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-6">
+                            <div className="bg-white w-full max-w-sm rounded-3xl p-6 space-y-4">
+                                <h3 className="font-bold">Nova Recarga</h3>
+                                <input type="number" className="w-full p-4 bg-slate-50 border rounded-2xl text-2xl font-black" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00 MT" />
+                                <button onClick={confirm} className="w-full bg-emerald-600 text-white font-bold py-4 rounded-2xl">Confirmar</button>
+                                <button onClick={() => setShowModal(false)} className="w-full text-slate-400 font-bold">Cancelar</button>
+                            </div>
+                        </div>
+                    )}
+                    <div className="bg-emerald-500 rounded-3xl p-6 text-white shadow-lg relative overflow-hidden">
+                        <div className="flex justify-between items-start">
+                            <p className="text-emerald-100 text-sm">Saldo Atual</p>
+                            <div className="bg-white/20 px-2 py-0.5 rounded-full text-[10px] font-bold">{isUpdating ? "Sinc..." : "Conectado"}</div>
+                        </div>
+                        <div className="flex justify-between items-center mt-2">
+                            <h2 className="text-4xl font-black">{balance.toFixed(2)} MT</h2>
+                            <button onClick={() => setShowModal(true)} className="bg-white/20 p-3 rounded-2xl"><PlusCircle/></button>
+                        </div>
+                        <div className="mt-6 flex items-center gap-2 font-bold"><Calendar size={18}/> Autonomia: {autonomyDays} dias</div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-white p-4 rounded-2xl border"><span className="text-[10px] font-bold text-slate-400 block uppercase">Hoje</span><p className="text-xl font-black">{dailyKwh.toFixed(2)} kWh</p></div>
+                        <div className="bg-white p-4 rounded-2xl border"><span className="text-[10px] font-bold text-slate-400 block uppercase">Vs Média</span><p className={`text-xl font-black ${consumptionDiffPercent > 0 ? 'text-orange-600' : 'text-emerald-600'}`}>{consumptionDiffPercent.toFixed(0)}%</p></div>
+                    </div>
+                    <button onClick={onUpdateData} className="w-full py-4 bg-white border border-slate-200 rounded-2xl font-bold flex items-center justify-center gap-3 text-slate-700 active:scale-95 transition-all">
+                        {isUpdating ? <Loader2 className="animate-spin text-emerald-600"/> : <RefreshCw className="text-emerald-600"/>} Sincronizar Dados
+                    </button>
+                </div>
+            );
+        };
+
+        const AppliancesScreen = ({ appliances, setAppliances, dailyKwh, tariffPerKWh }) => {
+            const [isAdding, setIsAdding] = useState(false);
+            const [newItem, setNewItem] = useState({ name: '', power: '', hours: '', quantity: 1 });
+            const [isScanning, setIsScanning] = useState(false);
+            const fileRef = useRef();
+
+            const save = () => {
+                setAppliances(prev => [...prev, { id: Date.now().toString(), name: newItem.name, power: Number(newItem.power), hoursPerDay: Number(newItem.hours), quantity: Number(newItem.quantity), isActive: true }]);
+                setIsAdding(false);
+                setNewItem({ name: '', power: '', hours: '', quantity: 1 });
+            };
+
+            const handleScan = async (e) => {
+                const file = e.target.files?.[0]; if(!file) return;
+                setIsScanning(true);
+                const reader = new FileReader();
+                reader.onload = async () => {
+                    const res = await analyzeAppliancePlate(reader.result.split(',')[1]);
+                    setNewItem({ name: res.suggestedName || '', power: res.power || '', hours: 1, quantity: 1 });
+                    setIsAdding(true);
+                    setIsScanning(false);
+                };
+                reader.readAsDataURL(file);
+            };
+
+            return (
+                <div className="space-y-4 animate-slide-up">
+                    <h2 className="text-xl font-bold">Aparelhos</h2>
+                    {isScanning && <div className="p-8 text-center text-emerald-600 font-bold"><Loader2 className="animate-spin mx-auto mb-2"/> Analisando placa...</div>}
+                    <div className="space-y-3">
+                        {appliances.map(a => (
+                            <div key={a.id} className="bg-white p-4 rounded-xl border flex justify-between items-center shadow-sm">
+                                <div className="flex items-center gap-3">
+                                    <div className="text-emerald-500"><CheckCircle2/></div>
+                                    <div><h4 className="text-sm font-bold">{a.quantity}x {a.name}</h4><p className="text-[10px] text-slate-400 uppercase font-bold">{a.power}W • {a.hoursPerDay}h/dia</p></div>
+                                </div>
+                                <button onClick={() => setAppliances(prev => prev.filter(x => x.id !== a.id))} className="text-red-400 p-2"><Trash2 size={18}/></button>
+                            </div>
+                        ))}
+                    </div>
+                    {!isAdding ? (
+                        <div className="grid grid-cols-2 gap-3 pt-2">
+                            <button onClick={() => setIsAdding(true)} className="bg-emerald-600 text-white p-4 rounded-2xl font-bold flex flex-col items-center gap-2"><Plus size={20}/>Manual</button>
+                            <button onClick={() => fileRef.current.click()} className="bg-slate-800 text-white p-4 rounded-2xl font-bold flex flex-col items-center gap-2"><Camera size={20}/>Escanear</button>
+                            <input type="file" ref={fileRef} className="hidden" onChange={handleScan} accept="image/*" />
+                        </div>
+                    ) : (
+                        <div className="bg-white p-6 rounded-2xl border shadow-xl space-y-4">
+                            <input className="w-full p-3 bg-slate-50 border rounded-xl" placeholder="Nome" value={newItem.name} onChange={e => setNewItem({...newItem, name: e.target.value})} />
+                            <div className="grid grid-cols-2 gap-2">
+                                <input type="number" className="p-3 bg-slate-50 border rounded-xl" placeholder="Watts" value={newItem.power} onChange={e => setNewItem({...newItem, power: e.target.value})} />
+                                <input type="number" className="p-3 bg-slate-50 border rounded-xl" placeholder="Horas" value={newItem.hours} onChange={e => setNewItem({...newItem, hours: e.target.value})} />
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => setIsAdding(false)} className="flex-1 font-bold text-slate-400">Voltar</button>
+                                <button onClick={save} className="flex-1 bg-emerald-600 text-white font-bold py-3 rounded-xl">Salvar</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const AutonomySimulator = ({ appliances, profile }) => {
+            const [form, setForm] = useState({ amount: 500, days: 10 });
+            const [strategy, setStrategy] = useState(null);
+            const [loading, setLoading] = useState(false);
+
+            const run = async () => { setLoading(true); const res = await getAutonomyStrategy(form.amount, form.days, appliances, profile); setStrategy(res); setLoading(false); };
+
+            return (
+                <div className="space-y-6 animate-slide-up">
+                    <h2 className="text-xl font-bold">Simulador de IA</h2>
+                    <div className="bg-white p-6 rounded-3xl border space-y-4">
+                        <div className="grid grid-cols-2 gap-4">
+                            <div><label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Valor (MT)</label><input type="number" className="w-full p-2 bg-slate-50 border rounded-xl font-bold" value={form.amount} onChange={e => setForm({...form, amount: e.target.value})} /></div>
+                            <div><label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Meta (Dias)</label><input type="number" className="w-full p-2 bg-slate-50 border rounded-xl font-bold" value={form.days} onChange={e => setForm({...form, days: e.target.value})} /></div>
+                        </div>
+                        <button onClick={run} disabled={loading} className="w-full bg-emerald-600 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-2">
+                            {loading ? <Loader2 className="animate-spin"/> : <Sparkles size={20}/>} Gerar Estratégia
+                        </button>
+                    </div>
+                    {strategy && (
+                        <div className="space-y-4">
+                            <div className="bg-indigo-600 text-white p-5 rounded-2xl"><h4 className="font-bold">Plano IA</h4><p className="text-sm mt-2">{strategy.explanation}</p></div>
+                            <div className="bg-white p-4 rounded-2xl border">
+                                <h4 className="text-[10px] font-bold text-red-500 uppercase">Desligar</h4>
+                                <div className="flex flex-wrap gap-2 mt-2">{strategy.stopUsing.map(s => <span key={s} className="bg-red-50 text-red-600 text-[10px] font-bold px-2 py-1 rounded-full">{s}</span>)}</div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const HistoryScreen = ({ recharges, dailyKwh, historicalAvg, appliances, profile }) => {
+            const chartData = [
+                { name: 'Seg', v: historicalAvg * 0.9 }, { name: 'Ter', v: historicalAvg * 1.1 },
+                { name: 'Qua', v: historicalAvg * 0.8 }, { name: 'Qui', v: historicalAvg * 1.5 },
+                { name: 'Sex', v: historicalAvg }, { name: 'Hoje', v: dailyKwh }
+            ];
+            return (
+                <div className="space-y-6 animate-slide-up">
+                    <h2 className="text-xl font-bold text-slate-800">Histórico</h2>
+                    <div className="bg-white p-4 rounded-2xl border shadow-sm h-64">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={chartData}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 10}} />
+                                <YAxis axisLine={false} tickLine={false} tick={{fill: '#94a3b8', fontSize: 10}} />
+                                <Bar dataKey="v" fill="#10b981" radius={[4, 4, 0, 0]} barSize={20} />
+                                <ReferenceLine y={historicalAvg} stroke="#10b981" strokeDasharray="5 5" />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                    <div className="space-y-2">
+                        {recharges.map(r => (
+                            <div key={r.id} className="bg-white p-4 rounded-xl border flex justify-between items-center shadow-sm">
+                                <div className="flex items-center gap-3"><Calendar className="text-emerald-500" size={18}/><div><p className="text-sm font-bold">{r.amount} MT</p><p className="text-[10px] text-slate-400">{new Date(r.date).toLocaleDateString()}</p></div></div>
+                                <span className="text-[10px] font-bold text-emerald-600">SUCESSO</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        const SettingsScreen = ({ profile, setProfile, onLogout }) => (
+            <div className="space-y-6 animate-slide-up">
+                <h2 className="text-xl font-bold">Ajustes</h2>
+                <div className="bg-white p-5 rounded-2xl border flex items-center gap-4">
+                    <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-slate-300 border"><User size={32}/></div>
+                    <div><h3 className="font-bold text-lg">{profile.name || "Seu Nome"}</h3><p className="text-xs text-slate-500">{profile.province}</p></div>
+                </div>
+                <div className="bg-white p-5 rounded-2xl border space-y-4">
+                    <div><label className="text-[10px] font-bold text-slate-400 uppercase">Nome</label><input className="w-full bg-slate-50 border p-2 rounded-lg" value={profile.name} onChange={e => setProfile({...profile, name: e.target.value})} /></div>
+                    <div><label className="text-[10px] font-bold text-slate-400 uppercase">Província</label><select className="w-full bg-slate-50 border p-2 rounded-lg" value={profile.province} onChange={e => setProfile({...profile, province: e.target.value})}>{PROVINCES.map(p => <option key={p} value={p}>{p}</option>)}</select></div>
+                </div>
+                <button onClick={onLogout} className="w-full py-4 bg-red-50 text-red-500 font-bold rounded-2xl flex items-center justify-center gap-2"><LogOut size={18}/> Sair</button>
+            </div>
+        );
+
+        const Onboarding = ({ onComplete }) => {
+            const [name, setName] = useState('');
+            return (
+                <div className="fixed inset-0 z-[110] bg-white flex flex-col items-center justify-center p-6 text-center animate-in">
+                    <Zap size={48} className="text-emerald-600 mb-4"/>
+                    <h2 className="text-2xl font-black text-slate-800 tracking-tight">Bem-vindo ao ContaLuz</h2>
+                    <p className="text-slate-500 mt-2 mb-8">Gestão inteligente de energia pré-paga para lares moçambicanos.</p>
+                    <input className="w-full max-w-sm p-4 bg-slate-50 border-2 rounded-2xl font-black text-lg text-center" placeholder="Qual o seu nome?" value={name} onChange={e => setName(e.target.value)} />
+                    <button onClick={() => onComplete({ name, onboardingCompleted: true, province: 'Maputo Cidade', residenceType: 'Casa', tariffPerKWh: 8.0, historicalAvgKWh: 5.0 })} disabled={!name} className="w-full max-w-sm mt-4 bg-emerald-600 text-white font-bold py-4 rounded-2xl disabled:opacity-50">Começar</button>
+                </div>
+            );
+        };
+
+        // --- APP MAIN ---
+
+        const App = () => {
+            const [showSplash, setShowSplash] = useState(true);
+            const [currentScreen, setCurrentScreen] = useState('dashboard');
+            const [balance, setBalance] = useState(0);
+            const [appliances, setAppliances] = useState([]);
+            const [recharges, setRecharges] = useState([]);
+            const [profile, setProfile] = useState({ onboardingCompleted: false, name: '', province: 'Maputo Cidade', residenceType: 'Casa', tariffPerKWh: 8.0, historicalAvgKWh: 5.0 });
+            const [isUpdating, setIsUpdating] = useState(false);
+
+            useEffect(() => {
+                const saved = localStorage.getItem('contaluz_data');
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    setBalance(parsed.balance || 0);
+                    setAppliances(parsed.appliances || []);
+                    setRecharges(parsed.recharges || []);
+                    setProfile(parsed.profile || profile);
+                }
+            }, []);
+
+            useEffect(() => {
+                localStorage.setItem('contaluz_data', JSON.stringify({ balance, appliances, profile, recharges }));
+            }, [balance, appliances, profile, recharges]);
+
+            const dailyKwh = useMemo(() => appliances.reduce((acc, a) => acc + (a.power * a.hoursPerDay * (a.quantity || 1) / 1000), 0), [appliances]);
+            const autonomyDays = dailyKwh > 0 ? Math.floor(balance / (dailyKwh * profile.tariffPerKWh)) : (balance > 0 ? "∞" : 0);
+            const consumptionDiff = profile.historicalAvgKWh > 0 ? ((dailyKwh - profile.historicalAvgKWh) / profile.historicalAvgKWh) * 100 : 0;
+
+            const handleRecharge = (val) => {
+                setBalance(prev => prev + val);
+                setRecharges(prev => [{id: Date.now(), amount: val, date: new Date().toISOString()}, ...prev]);
+            };
+
+            const handleUpdate = () => { setIsUpdating(true); setTimeout(() => setIsUpdating(false), 2000); };
+            const logout = () => { if (confirm("Limpar dados locais?")) { localStorage.removeItem('contaluz_data'); window.location.reload(); } };
+
+            const renderScreen = () => {
+                switch (currentScreen) {
+                    case 'dashboard': return (
+                        <>
+                            <Dashboard balance={balance} autonomyDays={autonomyDays} dailyKwh={dailyKwh} consumptionDiffPercent={consumptionDiff} onUpdateData={handleUpdate} onRecharge={handleRecharge} isUpdating={isUpdating} alerts={[]} />
+                            <button onClick={() => setCurrentScreen('simulator')} className="mt-4 w-full bg-indigo-600 text-white p-4 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg"><Sparkles size={20} /> Simulador IA</button>
+                        </>
+                    );
+                    case 'appliances': return <AppliancesScreen appliances={appliances} setAppliances={setAppliances} dailyKwh={dailyKwh} tariffPerKWh={profile.tariffPerKWh} />;
+                    case 'history': return <HistoryScreen recharges={recharges} dailyKwh={dailyKwh} historicalAvg={profile.historicalAvgKWh} appliances={appliances} profile={profile} />;
+                    case 'settings': return <SettingsScreen profile={profile} setProfile={setProfile} onLogout={logout} />;
+                    case 'simulator': return <AutonomySimulator appliances={appliances} profile={profile} />;
+                    case 'tips': return (
+                        <div className="space-y-4 animate-slide-up">
+                            <h2 className="text-xl font-bold">Dicas de IA</h2>
+                            <div className="bg-white p-5 rounded-2xl border shadow-sm space-y-2">
+                                <div className="flex items-center gap-2 text-yellow-600 font-bold"><Lightbulb size={20}/> Sugestão</div>
+                                <p className="text-xs text-slate-600">Com base nos seus {appliances.length} aparelhos, recomendamos o uso do Ferro de Engomar fora das horas de pico para economizar.</p>
+                            </div>
+                        </div>
+                    );
+                    default: return null;
+                }
+            };
+
+            return (
+                <div className="flex flex-col h-screen max-w-md mx-auto bg-white shadow-xl relative overflow-hidden">
+                    {showSplash && <SplashScreen onFinish={() => setShowSplash(false)} />}
+                    {!profile.onboardingCompleted && !showSplash && <Onboarding onComplete={setProfile} />}
+                    
+                    <header className="bg-emerald-600 text-white p-5 flex justify-between items-center shadow-md shrink-0 z-40">
+                        <div className="flex items-center gap-2">
+                            {currentScreen !== 'dashboard' && <button onClick={() => setCurrentScreen('dashboard')}><Zap size={18} /></button>}
+                            <h1 className="text-xl font-black tracking-tighter">ContaLuz</h1>
+                        </div>
+                        <div className="text-[10px] bg-emerald-500/50 px-2 py-1 rounded-full border border-white/20 uppercase font-bold tracking-widest">Moz</div>
+                    </header>
+
+                    <main className="flex-1 overflow-y-auto p-4 pb-24 scrollbar-hide">
+                        {renderScreen()}
+                    </main>
+
+                    <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-white border-t border-slate-100 py-3 px-2 flex justify-around items-center shadow-lg z-50">
+                        {[
+                            { id: 'dashboard', label: 'Painel', icon: <LayoutDashboard size={20} /> },
+                            { id: 'appliances', label: 'Aparelhos', icon: <Zap size={20} /> },
+                            { id: 'history', label: 'Histórico', icon: <History size={20} /> },
+                            { id: 'tips', label: 'Dicas', icon: <Lightbulb size={20} /> },
+                            { id: 'settings', label: 'Ajustes', icon: <Settings size={20} /> }
+                        ].map(item => (
+                            <button key={item.id} onClick={() => setCurrentScreen(item.id)} className={`flex flex-col items-center gap-1 transition-colors ${currentScreen === item.id ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                {item.icon}<span className="text-[9px] font-black uppercase tracking-tighter">{item.label}</span>
+                            </button>
+                        ))}
+                    </nav>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
 </body>
 </html>

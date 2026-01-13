@@ -1,8 +1,7 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { Appliance, UserProfile } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
 export async function getLocationSuggestions(type: 'city' | 'district' | 'neighborhood', parentValue: string, context?: { province?: string, city?: string, district?: string }) {
   const prompt = `
@@ -36,7 +35,8 @@ export async function getLocationSuggestions(type: 'city' | 'district' | 'neighb
       }
     });
 
-    return JSON.parse(response.text).suggestions;
+    const text = response.text || '{"suggestions": []}';
+    return JSON.parse(text).suggestions;
   } catch (error) {
     console.error("Erro ao obter sugestões de localização:", error);
     return [];
@@ -80,7 +80,8 @@ export async function getAIEnergyTips(appliances: Appliance[], profile: UserProf
       }
     });
 
-    return JSON.parse(response.text);
+    const text = response.text || '[]';
+    return JSON.parse(text);
   } catch (error) {
     console.error("Erro ao obter dicas do Gemini:", error);
     return [
@@ -142,7 +143,9 @@ export async function getAutonomyStrategy(amount: number, days: number, applianc
         }
       }
     });
-    return JSON.parse(response.text);
+    
+    const text = response.text || '{}';
+    return JSON.parse(text);
   } catch (error) {
     console.error("Erro no simulador:", error);
     return null;
@@ -181,7 +184,8 @@ export async function getMonthlyAnalysis(appliances: Appliance[], profile: UserP
       }
     });
 
-    return JSON.parse(response.text).insight;
+    const text = response.text || '{"insight": ""}';
+    return JSON.parse(text).insight;
   } catch (error) {
     console.error("Erro ao obter análise mensal:", error);
     return `O consumo está ${Math.abs(diffPercent)}% ${diffPercent >= 0 ? 'mais alto' : 'mais baixo'}. Verifique o uso de aparelhos de alta potência ou a quantidade de lâmpadas ligadas para entender melhor a variação.`;
@@ -222,7 +226,8 @@ export async function analyzeAppliancePlate(base64Image: string) {
       }
     });
 
-    return JSON.parse(response.text);
+    const text = response.text || '{}';
+    return JSON.parse(text);
   } catch (error) {
     console.error("Erro no OCR/IA:", error);
     throw new Error("Não foi possível ler a placa. Tente preencher manualmente.");
